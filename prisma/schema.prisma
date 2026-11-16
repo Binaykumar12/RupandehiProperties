@@ -1,0 +1,288 @@
+// Rupandehi Property Hub - Production Database Schema (PostgreSQL + PostGIS)
+// Datasource and generator configuration
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User Roles in Rupandehi Property Hub
+enum Role {
+  BUYER
+  RENTER
+  OWNER
+  AGENT
+  ADMIN
+}
+
+// Verification Status for Property Title and Listings
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING_REVIEW
+  TITLE_VERIFIED
+  REJECTED
+}
+
+// Property Transaction Purpose
+enum Purpose {
+  SALE
+  RENT
+}
+
+// Real Estate Categories in Rupandehi
+enum PropertyCategory {
+  RESIDENTIAL_PLOT
+  RESIDENTIAL_HOME
+  COMMERCIAL_SHOWROOM
+  HEAVY_INDUSTRIAL
+  AGRICULTURAL_LAND
+}
+
+// Inquiry Status Lifecycle
+enum InquiryStatus {
+  NEW
+  CONTACTED
+  SITE_VISIT_SCHEDULED
+  UNDER_NEGOTIATION
+  CLOSED
+  ARCHIVED
+}
+
+// Document Types for Land Title Verification
+enum DocumentType {
+  LALPURJA_LAND_CERTIFICATE
+  NAKSA_CADASTRAL_TRACE
+  CITIZENSHIP_CARD
+  MUNICIPAL_TAX_CLEARANCE
+  POWER_OF_ATTORNEY
+}
+
+// Core User Account Model
+model User {
+  id              String            @id @default(cuid())
+  email           String?           @unique
+  phone           String            @unique
+  fullName        String
+  passwordHash    String?
+  role            Role              @default(BUYER)
+  avatarUrl       String?
+  isPhoneVerified Boolean           @default(false)
+  isKycVerified   Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  // Relationships
+  agentProfile    AgentProfile?
+  ownedProperties Property[]        @relation("OwnerProperties")
+  inquiries       Inquiry[]
+  siteVisits      SiteVisit[]       @relation("BuyerVisits")
+  savedProperties SavedProperty[]
+  uploadedDocs    VerificationDocument[] @relation("UploaderDocs")
+  auditLogs       AuditLog[]
+
+  @@index([phone])
+  @@index([role])
+}
+
+// Professional Real Estate Agent Profile
+model AgentProfile {
+  id              String            @id @default(cuid())
+  userId          String            @unique
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agencyName      String
+  licenseNumber   String?           @unique
+  officeAddress   String
+  serviceAreas    String[]          // e.g. ["Butwal", "Tilottama", "Siddharthanagar"]
+  yearsExperience Int               @default(1)
+  isVerifiedAgent Boolean           @default(false)
+  bio             String?
+  rating          Decimal           @default(5.0) @db.Decimal(2, 1)
+  reviewsCount    Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  // Relationships
+  assignedProperties Property[]    @relation("AgentProperties")
+  handledVisits      SiteVisit[]   @relation("AgentVisits")
+
+  @@index([agencyName])
+  @@index([isVerifiedAgent])
+}
+
+// Property Listing Model
+model Property {
+  id                  String             @id @default(cuid())
+  referenceCode       String             @unique // e.g. "RPH-BTL-101"
+  title               String
+  description         String
+  purpose             Purpose            @default(SALE)
+  category            PropertyCategory
+  
+  // Pricing in Nepalese Rupees (NPR)
+  priceNpr            Decimal            @db.Decimal(14, 2)
+  isNegotiable        Boolean            @default(true)
+  rentalPeriod        String?            // "monthly", "yearly"
+
+  // Rupandehi Regional Location
+  locality            String             // e.g. "Butwal", "Tilottama", "Siddharthanagar"
+  wardNumber          Int?
+  streetAddress       String?
+  latitude            Decimal?           @db.Decimal(9, 6)
+  longitude           Decimal?           @db.Decimal(9, 6)
+
+  // Terai Land Measurements
+  bigha               Int                @default(0)
+  kattha              Int                @default(0)
+  dhur                Decimal            @default(0) @db.Decimal(5, 2)
+  areaSqFt            Decimal            @db.Decimal(10, 2)
+  roadAccessFeet      Decimal?           @db.Decimal(5, 1)
+  roadPaved           Boolean            @default(true)
+  facingDirection     String?            // "East", "North-East", etc.
+
+  // Structural details (for homes & commercial)
+  bedrooms            Int?
+  bathrooms           Int?
+  builtYear           Int?
+  totalFloors         Decimal?           @db.Decimal(3, 1)
+  parkingSpaces       Int?               @default(0)
+
+  // Amenities and features
+  amenities           String[]           // ["Water Supply", "Electricity 3-Phase", "Drainage", "Compound Wall"]
+
+  // Verification & Status
+  verificationStatus  VerificationStatus @default(UNVERIFIED)
+  isFeatured          Boolean            @default(false)
+  isArchived          Boolean            @default(false)
+  viewsCount          Int                @default(0)
+  inquiriesCount      Int                @default(0)
+
+  // Ownership & Agent assignment
+  ownerId             String
+  owner               User               @relation("OwnerProperties", fields: [ownerId], references: [id])
+  agentId             String?
+  agent               AgentProfile?      @relation("AgentProperties", fields: [agentId], references: [id])
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relationships
+  media               PropertyMedia[]
+  inquiries           Inquiry[]
+  siteVisits          SiteVisit[]
+  savedBy             SavedProperty[]
+  documents           VerificationDocument[]
+
+  @@index([locality])
+  @@index([purpose, category])
+  @@index([priceNpr])
+  @@index([verificationStatus])
+}
+
+// High-Resolution Property Media & Gallery
+model PropertyMedia {
+  id           String   @id @default(cuid())
+  propertyId   String
+  property     Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url          String
+  thumbnailUrl String?
+  caption      String?
+  mediaType    String   @default("image") // "image", "video", "floorplan"
+  sortOrder    Int      @default(0)
+  isFeatured   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([propertyId, sortOrder])
+}
+
+// Encrypted Title & Cadastral Verification Documents
+model VerificationDocument {
+  id              String        @id @default(cuid())
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  uploaderId      String
+  uploader        User          @relation("UploaderDocs", fields: [uploaderId], references: [id])
+  documentType    DocumentType
+  documentUrl     String        // Encrypted URL in secure bucket
+  fileSizeBytes   Int
+  mimeType        String
+  isVerified      Boolean       @default(false)
+  reviewedByAdmin String?
+  reviewNotes     String?
+  reviewedAt      DateTime?
+  uploadedAt      DateTime      @default(now())
+
+  @@index([propertyId])
+  @@index([isVerified])
+}
+
+// Customer Inquiry & Lead Lifecycle
+model Inquiry {
+  id            String        @id @default(cuid())
+  propertyId    String
+  property      Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?         @relation(fields: [userId], references: [id])
+  clientName    String
+  clientPhone   String
+  clientEmail   String?
+  message       String
+  requestedVisit DateTime?
+  status        InquiryStatus @default(NEW)
+  internalNotes String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([propertyId])
+  @@index([clientPhone])
+  @@index([status])
+}
+
+// Coordinated Site Visits
+model SiteVisit {
+  id             String    @id @default(cuid())
+  propertyId     String
+  property       Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  buyerId        String
+  buyer          User      @relation("BuyerVisits", fields: [buyerId], references: [id])
+  agentId        String?
+  agent          AgentProfile? @relation("AgentVisits", fields: [agentId], references: [id])
+  scheduledAt    DateTime
+  status         String    @default("CONFIRMED") // "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"
+  meetingAddress String
+  feedbackNotes  String?
+  createdAt      DateTime  @default(now())
+
+  @@index([propertyId, scheduledAt])
+}
+
+// Buyer Favorites / Saved Properties
+model SavedProperty {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  savedAt    DateTime @default(now())
+
+  @@unique([userId, propertyId])
+}
+
+// Platform Compliance & Security Audit Logs
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String   // e.g. "TITLE_APPROVED", "PRICE_MODIFIED", "EXPORT_LEADS"
+  entityType String   // "Property", "User", "VerificationDocument"
+  entityId   String
+  ipAddress  String?
+  details    Json?
+  timestamp  DateTime @default(now())
+
+  @@index([action, timestamp])
+}
